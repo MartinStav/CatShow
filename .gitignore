@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.npm/
+npm-debug.log*
+yarn-error.log*
+yarn-debug.log*
+
+# Build outputs
+dist/
+.quasar/
+.adonisjs/
+backend/build/
+backend/.adonisjs/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/.env.local
+backend/.env.*.local
+
+# Logs / temp
+*.log
+backend/tmp/*
+!backend/tmp/.gitkeep
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+.fleet/
+*.swp
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Postgres data (ak by si niekto namountoval na host)
+postgres-data/
+pgdata/

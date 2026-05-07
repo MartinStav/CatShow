@@ -1,0 +1,66 @@
+* {
+  font-family: Inter, sans-serif !important;
+  font-weight: 400 !important;
+}
+
+body {
+  font-family: Inter, sans-serif !important;
+  font-weight: 400 !important;
+}
+
+.q-icon,
+.material-icons,
+.material-icons-outlined,
+.material-icons-round,
+.material-icons-sharp,
+[class^='material-icons'],
+[class*=' material-icons'] {
+  font-family: 'Material Icons' !important;
+  font-weight: normal !important;
+  font-style: normal !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  display: inline-block !important;
+  white-space: nowrap !important;
+  word-wrap: normal !important;
+  direction: ltr !important;
+  -webkit-font-feature-settings: 'liga' !important;
+  -webkit-font-smoothing: antialiased !important;
+}
+
+.q-icon[style*='48px'],
+.q-icon[style*='width: 48px'],
+.q-icon[style*='height: 48px'],
+.q-icon[style*='font-size: 48px'] {
+  font-size: 42px !important;
+  width: 42px !important;
+  height: 42px !important;
+}
+
+.q-icon[style*='32px'],
+.q-icon[style*='width: 32px'],
+.q-icon[style*='height: 32px'],
+.q-icon[style*='font-size: 32px'] {
+  font-size: 28px !important;
+  width: 28px !important;
+  height: 28px !important;
+}
+
+.q-card {
+  border-radius: 0.875rem !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  background: white !important;
+  box-shadow: none !important;
+}
+
+.q-page {
+  background: #f9f5ff !important;
+}
+
+.q-page-container {
+  background: #f9f5ff !important;
+}
+
+.q-layout {
+  background: #f9f5ff !important;
+}

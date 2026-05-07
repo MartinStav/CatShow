@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-catshow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-catshow}
+      POSTGRES_DB: ${POSTGRES_DB:-catshow}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-catshow} -d ${POSTGRES_DB:-catshow}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-UTC}
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HOST: 0.0.0.0
+      PORT: 3333
+
+      APP_KEY: ${APP_KEY}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      SESSION_DRIVER: ${SESSION_DRIVER:-cookie}
+
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_USER: ${POSTGRES_USER:-catshow}
+      PG_PASSWORD: ${POSTGRES_PASSWORD:-catshow}
+      PG_DB_NAME: ${POSTGRES_DB:-catshow}
+
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+
+      WEB_PUSH_VAPID_SUBJECT: ${WEB_PUSH_VAPID_SUBJECT:-}
+      WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
+      WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
+
+      RUN_SEEDS: ${RUN_SEEDS:-true}
+      SEED_SUPERADMIN_EMAIL: ${SEED_SUPERADMIN_EMAIL:-}
+      SEED_SUPERADMIN_FORCE_RESET: ${SEED_SUPERADMIN_FORCE_RESET:-false}
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3333/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_URL: /api/v1
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - '${FRONTEND_PORT:-8080}:80'
+
+volumes:
+  pgdata:
