@@ -1,5 +1,6 @@
 <template>
   <q-layout view="hHh lpR fFf">
+    <a href="#main-content" class="skip-link">Preskočiť na hlavný obsah</a>
     <q-header v-if="showHeader" class="bg-white text-primary header-styled">
       <q-toolbar class="toolbar-tight">
         <q-btn
@@ -10,6 +11,7 @@
           icon="arrow_back"
           color="grey-8"
           class="q-mr-sm"
+          aria-label="Späť na úvod"
           @click="goBack"
         />
 
@@ -49,6 +51,7 @@
             icon="person"
             class="q-mr-sm"
             :label="authStore.user?.fullName"
+            aria-label="Používateľské menu"
           >
             <q-list>
               <template v-if="authStore.isAdmin">
@@ -227,7 +230,7 @@
       </q-scroll-area>
     </q-drawer>
 
-    <q-page-container v-show="!mustChangePassword">
+    <q-page-container id="main-content" v-show="!mustChangePassword" role="main" tabindex="-1">
       <router-view />
     </q-page-container>
 
@@ -730,5 +733,27 @@ const onCreateCompetition = async () => {
 
 .field-block {
   margin-bottom: 10px;
+}
+
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: -40px;
+  z-index: 3000;
+  background: #111827;
+  color: #ffffff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+}
+
+.skip-link:focus-visible {
+  top: 12px;
+}
+
+:deep(.q-btn:focus-visible),
+:deep(.q-item[tabindex='0']:focus-visible) {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 </style>

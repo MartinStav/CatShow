@@ -13,6 +13,7 @@
               v-model="identifier"
               label="Email alebo telefón"
               outlined
+              autocomplete="username"
               :rules="[val => !!val || 'Povinné pole']"
               lazy-rules
             >
@@ -26,6 +27,7 @@
               label="Heslo"
               :type="showPassword ? 'text' : 'password'"
               outlined
+              autocomplete="current-password"
               :rules="[val => !!val || 'Heslo je povinné']"
               lazy-rules
             >
@@ -33,9 +35,12 @@
                 <q-icon name="lock" />
               </template>
               <template v-slot:append>
-                <q-icon
-                  :name="showPassword ? 'visibility' : 'visibility_off'"
-                  class="cursor-pointer"
+                <q-btn
+                  flat
+                  round
+                  dense
+                  :icon="showPassword ? 'visibility' : 'visibility_off'"
+                  :aria-label="showPassword ? 'Skryť heslo' : 'Zobraziť heslo'"
                   @click="showPassword = !showPassword"
                 />
               </template>
