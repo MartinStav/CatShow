@@ -5,6 +5,7 @@ import hash from '@adonisjs/core/services/hash'
 import CompetitionRole from '#models/competition_role'
 import Judge from '#models/judge'
 import Exhibitor from '#models/exhibitor'
+import { writeAuditLog } from '#utils/event_audit'
 import {
   checkLoginAllowed,
   recordLoginFailure,
@@ -71,6 +72,14 @@ export default class AuthController {
 
     const gate = checkLoginAllowed(identifier, ip)
     if (!gate.allowed) {
+      await writeAuditLog({
+        action: 'auth_login_blocked_rate_limit',
+        userId: null,
+        competitionId: null,
+        entityType: 'user',
+        entityId: null,
+        payload: { identifier, ip, retryAfterSeconds: gate.retryAfterSeconds },
+      })
       response.header('Retry-After', String(gate.retryAfterSeconds))
       return response.tooManyRequests({
         message: 'Príliš veľa pokusov o prihlásenie. Skúste to neskôr.',
@@ -83,6 +92,14 @@ export default class AuthController {
 
       if (!user.isActive) {
         recordLoginFailure(identifier, ip)
+        await writeAuditLog({
+          action: 'auth_login_failed_inactive',
+          userId: user.id,
+          competitionId: null,
+          entityType: 'user',
+          entityId: user.id,
+          payload: { identifier, ip },
+        })
         return response.unauthorized({ message: 'Account is deactivated' })
       }
 
@@ -90,6 +107,14 @@ export default class AuthController {
       const competitionRoles = await getUserWithRoles(user.id)
 
       recordLoginSuccess(identifier, ip)
+      await writeAuditLog({
+        action: 'auth_login_success',
+        userId: user.id,
+        competitionId: null,
+        entityType: 'user',
+        entityId: user.id,
+        payload: { ip },
+      })
 
       return response.ok({
         user: {
@@ -105,6 +130,14 @@ export default class AuthController {
       })
     } catch {
       recordLoginFailure(identifier, ip)
+      await writeAuditLog({
+        action: 'auth_login_failed_invalid_credentials',
+        userId: null,
+        competitionId: null,
+        entityType: 'user',
+        entityId: null,
+        payload: { identifier, ip },
+      })
       return response.unauthorized({ message: 'Invalid credentials' })
     }
   }
@@ -114,6 +147,14 @@ export default class AuthController {
     if (user.currentAccessToken) {
       await User.accessTokens.delete(user, user.currentAccessToken.identifier)
     }
+    await writeAuditLog({
+      action: 'auth_logout',
+      userId: user.id,
+      competitionId: null,
+      entityType: 'user',
+      entityId: user.id,
+      payload: {},
+    })
     return response.ok({ message: 'Logged out successfully' })
   }
 
@@ -144,6 +185,14 @@ export default class AuthController {
     user.password = newPassword
     user.mustChangePassword = false
     await user.save()
+    await writeAuditLog({
+      action: 'auth_password_changed',
+      userId: user.id,
+      competitionId: null,
+      entityType: 'user',
+      entityId: user.id,
+      payload: {},
+    })
 
     return response.ok({
       message: 'Password changed successfully',
