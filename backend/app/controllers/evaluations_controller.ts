@@ -1,11 +1,14 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import Evaluation from '#models/evaluation'
+import Cat from '#models/cat'
+import JudgingOrder from '#models/judging_order'
 import { assertNominationEvaluationAllowed } from '#utils/nomination_cat_scope'
 import { ensureCompetitionAccess } from '#utils/competition_access'
 import { canRoundRunNow } from '#utils/competition_flow'
 import { writeAuditLog } from '#utils/event_audit'
 import Exhibitor from '#models/exhibitor'
 import CompetitionRole from '#models/competition_role'
+import CompetitionGrade from '#models/competition_grade'
 import NominationPhaseCompletion from '#models/nomination_phase_completion'
 import Ring1RankingCompletion from '#models/ring1_ranking_completion'
 import Ring2RankingCompletion from '#models/ring2_ranking_completion'
@@ -31,6 +34,26 @@ function applyNominationGradeRules(evaluation: Evaluation) {
   evaluation.titles = []
 }
 
+async function nominationGradeAllowsExtras(
+  competitionId: number,
+  grade: string | null | undefined
+): Promise<boolean> {
+  if (!grade) return false
+  const normalized = grade.trim()
+  if (normalized.length === 0) return false
+
+  const grades = await CompetitionGrade.query()
+    .where('competitionId', competitionId)
+    .select(['code', 'eligibleForNomBis'])
+  const eligibleCodes = new Set(
+    grades.filter((g) => g.eligibleForNomBis === true).map((g) => g.code.trim())
+  )
+  if (eligibleCodes.size === 0) {
+    eligibleCodes.add('EX1')
+  }
+  return eligibleCodes.has(normalized)
+}
+
 const RING2_EVAL_LOCKED_MESSAGE =
   'Odovzdanie poradia je potvrdené. \u00dapravy sú povolené až po odomknutí administrátorom.'
 
@@ -44,11 +67,85 @@ async function dedupNominationNomBis(
   savedEvaluation?: Evaluation
 ) {
   if (judgeId === null || judgeId === undefined) return
+  if (!savedEvaluation) return
+
+  const currentCatId = savedEvaluation.catId
+  const currentCat = await Cat.query()
+    .where('competitionId', competitionId)
+    .where('id', currentCatId)
+    .first()
+  if (!currentCat) return
+
+  const normalize = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim().toLowerCase()
+    return trimmed.length > 0 ? trimmed : null
+  }
+  const normalizeProtocolGroup = (v: unknown): string => {
+    if (typeof v !== 'string') return '__default__'
+    const t = v.trim().toLowerCase()
+    return t.length > 0 ? t : '__default__'
+  }
+  const groupTokensFromCat = (cat: { group?: string | null; groups?: string[] | null }) => {
+    const out = new Set<string>()
+    const single = normalize(cat.group)
+    if (single) out.add(single)
+    if (Array.isArray(cat.groups)) {
+      for (const g of cat.groups) {
+        const token = normalize(g)
+        if (token) out.add(token)
+      }
+    }
+    return out
+  }
+
+  let scopedCatIds = new Set<number>([currentCatId])
+  const currentOrderRows = await JudgingOrder.query()
+    .where('competitionId', competitionId)
+    .where('judgeId', judgeId)
+    .where('catId', currentCatId)
+    .select(['protocolGroup'])
+
+  const protocolGroups = new Set<string>()
+  for (const o of currentOrderRows) {
+    protocolGroups.add(normalizeProtocolGroup(o.protocolGroup))
+  }
+
+  if (protocolGroups.size > 0) {
+    const judgeOrders = await JudgingOrder.query()
+      .where('competitionId', competitionId)
+      .where('judgeId', judgeId)
+      .select(['catId', 'protocolGroup'])
+
+    for (const o of judgeOrders) {
+      if (protocolGroups.has(normalizeProtocolGroup(o.protocolGroup))) {
+        scopedCatIds.add(o.catId)
+      }
+    }
+  } else {
+    const currentGroups = groupTokensFromCat(currentCat)
+    if (currentGroups.size > 0) {
+      const allCats = await Cat.query()
+        .where('competitionId', competitionId)
+        .select(['id', 'group', 'groups'])
+      for (const c of allCats) {
+        const tokens = groupTokensFromCat(c)
+        for (const token of tokens) {
+          if (currentGroups.has(token)) {
+            scopedCatIds.add(c.id)
+            break
+          }
+        }
+      }
+    }
+  }
+
   const trues = await Evaluation.query()
     .where('competitionId', competitionId)
     .where('round', 'nomination')
     .where('judgeId', judgeId)
     .where('nomBis', true)
+    .whereIn('catId', [...scopedCatIds])
     .orderBy('updatedAt', 'desc')
     .orderBy('id', 'desc')
 
@@ -72,6 +169,120 @@ async function dedupNominationNomBis(
   if (loserIds.length === 0) return
 
   await Evaluation.query().whereIn('id', loserIds).update({ nomBis: false })
+}
+
+/**
+ * V jednej skupine môže mať konkrétny titul iba jedna mačka na sudcu.
+ * Ak sa titul priradí aktuálnej mačke, z ostatných mačiek v rovnakej skupine
+ * (pre toho istého sudcu) sa odoberie.
+ */
+async function enforceUniqueNominationTitlesPerGroup(
+  competitionId: number,
+  judgeId: number | null,
+  catId: number,
+  titles: string[]
+) {
+  if (judgeId === null || titles.length === 0) return
+
+  const currentCat = await Cat.query()
+    .where('competitionId', competitionId)
+    .where('id', catId)
+    .first()
+  if (!currentCat) return
+
+  const normalize = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim().toLowerCase()
+    return trimmed.length > 0 ? trimmed : null
+  }
+
+  const groupTokensFromCat = (cat: { group?: string | null; groups?: string[] | null }) => {
+    const out = new Set<string>()
+    const single = normalize(cat.group)
+    if (single) out.add(single)
+    if (Array.isArray(cat.groups)) {
+      for (const g of cat.groups) {
+        const token = normalize(g)
+        if (token) out.add(token)
+      }
+    }
+    return out
+  }
+
+  const normalizeProtocolGroup = (v: unknown): string => {
+    if (typeof v !== 'string') return '__default__'
+    const t = v.trim().toLowerCase()
+    return t.length > 0 ? t : '__default__'
+  }
+
+  // Primárne berieme skupinu z judge protokolu (presne to, čo steward/judge reálne hodnotí).
+  const currentOrderRows = await JudgingOrder.query()
+    .where('competitionId', competitionId)
+    .where('judgeId', judgeId)
+    .where('catId', catId)
+    .select(['protocolGroup'])
+
+  const protocolGroups = new Set<string>()
+  for (const o of currentOrderRows) {
+    protocolGroups.add(normalizeProtocolGroup(o.protocolGroup))
+  }
+
+  let peerCats: Array<{ id: number }> = []
+  if (protocolGroups.size > 0) {
+    const judgeOrders = await JudgingOrder.query()
+      .where('competitionId', competitionId)
+      .where('judgeId', judgeId)
+      .whereNot('catId', catId)
+      .select(['catId', 'protocolGroup'])
+
+    const peerIds = new Set<number>()
+    for (const o of judgeOrders) {
+      if (protocolGroups.has(normalizeProtocolGroup(o.protocolGroup))) {
+        peerIds.add(o.catId)
+      }
+    }
+    peerCats = [...peerIds].map((id) => ({ id }))
+  } else {
+    // Fallback: ak judge protokol nie je vytvorený, použijeme mapovanie podľa cat.group/cat.groups.
+    const currentGroups = groupTokensFromCat(currentCat)
+    if (currentGroups.size === 0) return
+
+    const allPeerCats = await Cat.query()
+      .where('competitionId', competitionId)
+      .whereNot('id', catId)
+      .select(['id', 'group', 'groups'])
+
+    peerCats = allPeerCats
+      .filter((peer) => {
+        const peerGroups = groupTokensFromCat(peer)
+        for (const token of peerGroups) {
+          if (currentGroups.has(token)) return true
+        }
+        return false
+      })
+      .map((c) => ({ id: c.id }))
+  }
+
+  if (peerCats.length === 0) return
+
+  const peerCatIds = peerCats.map((c) => c.id)
+  const normalizedIncoming = new Set(titles.map((t) => t.trim()).filter((t) => t.length > 0))
+  if (normalizedIncoming.size === 0) return
+
+  const peerEvals = await Evaluation.query()
+    .where('competitionId', competitionId)
+    .where('round', 'nomination')
+    .where('judgeId', judgeId)
+    .whereIn('catId', peerCatIds)
+
+  for (const ev of peerEvals) {
+    const currentTitles = Array.isArray(ev.titles) ? ev.titles : []
+    const nextTitles = currentTitles.filter((t) => !normalizedIncoming.has((t ?? '').trim()))
+    if (nextTitles.length !== currentTitles.length) {
+      ev.titles = nextTitles
+      await ev.save()
+    }
+  }
 }
 
 async function isJudgeNominationLocked(
@@ -284,12 +495,22 @@ export default class EvaluationsController {
       evaluation.merge(data)
       evaluation.grade = coerceGradeValue(evaluation.grade)
       applyNominationGradeRules(evaluation)
+      if (
+        evaluation.round === 'nomination' &&
+        !(await nominationGradeAllowsExtras(competition.id, evaluation.grade))
+      ) {
+        evaluation.nomBis = false
+        evaluation.titles = []
+      }
       await evaluation.save()
     } else {
       const grade = coerceGradeValue(data.grade)
       let titlesPayload = Array.isArray(data.titles) ? [...(data.titles as string[])] : []
       let nomBisPayload = !!data.nomBis
-      if (data.round === 'nomination' && grade === null) {
+      if (
+        data.round === 'nomination' &&
+        (!(await nominationGradeAllowsExtras(competition.id, grade)) || grade === null)
+      ) {
         titlesPayload = []
         nomBisPayload = false
       }
@@ -304,6 +525,12 @@ export default class EvaluationsController {
 
     if (evaluation.round === 'nomination' && evaluation.judgeId !== null) {
       await dedupNominationNomBis(competition.id, evaluation.judgeId, evaluation)
+      await enforceUniqueNominationTitlesPerGroup(
+        competition.id,
+        evaluation.judgeId,
+        evaluation.catId,
+        evaluation.titles ?? []
+      )
     }
 
     await evaluation.load('cat')
@@ -343,6 +570,13 @@ export default class EvaluationsController {
     evaluation.merge(data)
     evaluation.grade = coerceGradeValue(evaluation.grade)
     applyNominationGradeRules(evaluation)
+    if (
+      evaluation.round === 'nomination' &&
+      !(await nominationGradeAllowsExtras(competition.id, evaluation.grade))
+    ) {
+      evaluation.nomBis = false
+      evaluation.titles = []
+    }
     const round = evaluation.round
     const roundCheck = canRoundRunNow(competition, round)
     if (!roundCheck.ok) {
@@ -399,6 +633,12 @@ export default class EvaluationsController {
     await evaluation.save()
     if (evaluation.round === 'nomination' && evaluation.judgeId !== null) {
       await dedupNominationNomBis(competition.id, evaluation.judgeId, evaluation)
+      await enforceUniqueNominationTitlesPerGroup(
+        competition.id,
+        evaluation.judgeId,
+        evaluation.catId,
+        evaluation.titles ?? []
+      )
     }
     await evaluation.load('cat')
     await evaluation.load('judge')

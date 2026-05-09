@@ -123,11 +123,6 @@ async function createUsersFromImportJson(
 
     const alreadyThere = await findExistingUserForImport(email, phone, trx)
     if (alreadyThere) {
-      alreadyThere.useTransaction(trx)
-      alreadyThere.fullName = data.fullName
-      alreadyThere.password = data.password
-      alreadyThere.mustChangePassword = true
-      await alreadyThere.save()
       continue
     }
 

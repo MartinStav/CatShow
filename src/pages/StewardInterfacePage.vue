@@ -6,8 +6,6 @@
       </div>
 
       <template v-else>
-        <div class="text-h5 text-weight-medium q-mb-lg">Stevard – vyvolávanie mačiek</div>
-
         <q-banner
           v-if="canStewardImpersonate && impersonateJudgeId != null"
           rounded
@@ -64,15 +62,24 @@
             />
 
             <q-banner
-              v-if="selectedJudgeConfirmed"
+              v-if="selectedJudgeConfirmed || nominationGroupReadyForResults"
               rounded
               class="bg-green-2 text-dark q-mb-md"
             >
-              Rozhodca <strong>{{ selectedJudgeName || '—' }}</strong> už potvrdil odovzdanie nominácie.
+              <template v-if="selectedJudgeConfirmed">
+                Rozhodca <strong>{{ selectedJudgeName || '—' }}</strong> už potvrdil odovzdanie nominácie.
+              </template>
+              <template v-else>
+                Skupina <strong>{{ selectedStewardProtocolGroup || '—' }}</strong> je vyhodnotená, výsledky sú pripravené.
+              </template>
             </q-banner>
 
             <q-card
-              v-if="selectedJudgeConfirmed && selectedJudgeId != null && stewardNominationResultSlots.length > 0"
+              v-if="
+                (selectedJudgeConfirmed || nominationGroupReadyForResults) &&
+                selectedJudgeId != null &&
+                stewardNominationResultSlots.length > 0
+              "
               flat
               bordered
               class="steward-results-card q-mb-lg"
@@ -821,12 +828,23 @@ const protocolSlotsForSelectedJudge = computed((): ProtocolCatSlot[] => {
 });
 
 const stewardNominationResultSlots = computed(() => {
-  if (!selectedJudgeConfirmed.value || selectedJudgeId.value == null) return [];
+  if (selectedJudgeId.value == null) return [];
   const jid = selectedJudgeId.value;
   return protocolSlotsForSelectedJudge.value.map((slot) => ({
     ...slot,
     ev: findStewardEvaluation(Number(slot.cat.id), jid, 'nomination'),
   }));
+});
+
+const nominationGroupReadyForResults = computed(() => {
+  if (selectedJudgeId.value == null) return false;
+  const slots = protocolSlotsForSelectedJudge.value;
+  if (slots.length === 0) return false;
+  const jid = selectedJudgeId.value;
+  return slots.every((slot) => {
+    const ev = findStewardEvaluation(Number(slot.cat.id), jid, 'nomination');
+    return typeof ev?.grade === 'string' && ev.grade.trim().length > 0;
+  });
 });
 
 const stewardRing1ResultSlots = computed(() => {

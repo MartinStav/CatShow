@@ -572,7 +572,9 @@ async function submitRing1Complete() {
   if (!competitionId.value || ring1ConfirmBusy.value) return;
   ring1ConfirmBusy.value = true;
   try {
-    await api.post(`/competitions/${competitionId.value}/ring1/complete`);
+    await api.post(`/competitions/${competitionId.value}/ring1/complete`, {
+      asJudgeId: route.query.asJudgeId ?? undefined,
+    });
     ring1SubmissionLocked.value = true;
     await loadData({ silent: true });
     $q.notify({

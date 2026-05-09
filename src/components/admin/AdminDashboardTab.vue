@@ -48,7 +48,7 @@
         </q-card>
       </div>
 
-      <div class="col-12 col-md-6">
+      <div class="col-12">
         <q-card class="full-height">
           <q-card-section>
             <div class="row items-center q-gutter-sm q-mb-md">

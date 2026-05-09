@@ -2,8 +2,8 @@ import Cat from '#models/cat'
 import CompetitionGrade from '#models/competition_grade'
 import CompetitionRole from '#models/competition_role'
 import Evaluation from '#models/evaluation'
-import NominationPhaseCompletion from '#models/nomination_phase_completion'
 import Ring2RankingCompletion from '#models/ring2_ranking_completion'
+import JudgingOrder from '#models/judging_order'
 import { getNominationCatScope } from '#utils/nomination_cat_scope'
 
 /** Súťaž môže ukončiť superadmin, admin alebo administrátor súťaže. */
@@ -23,8 +23,15 @@ export async function userCanFinishCompetition(
 /** Skontroluje, či má sudca ohodnotené všetky „svoje" mačky (podľa poradia). */
 export async function judgeNominationIncompleteMessage(
   competitionId: number,
-  judgeId: number
+  judgeId: number,
+  protocolGroupKey?: string | null
 ): Promise<string | null> {
+  const normalizeProtocolGroup = (v: unknown): string => {
+    if (typeof v !== 'string') return '__default__'
+    const t = v.trim().toLowerCase()
+    return t.length > 0 ? t : '__default__'
+  }
+
   const scope = await getNominationCatScope(competitionId, judgeId)
   let expectedCatIds: number[]
   if (scope.kind === 'all') {
@@ -35,6 +42,29 @@ export async function judgeNominationIncompleteMessage(
   }
 
   if (scope.kind === 'assigned' && expectedCatIds.length === 0) {
+    return null
+  }
+
+  const hasProtocolGroupFilter =
+    typeof protocolGroupKey === 'string' && protocolGroupKey.trim().length > 0
+  if (hasProtocolGroupFilter) {
+    const normalizedGroup = normalizeProtocolGroup(protocolGroupKey)
+    const assignedSet = new Set(expectedCatIds)
+    const rows = await JudgingOrder.query()
+      .where('competitionId', competitionId)
+      .where('judgeId', judgeId)
+      .select(['catId', 'protocolGroup'])
+    expectedCatIds = [
+      ...new Set(
+        rows
+          .filter((r) => normalizeProtocolGroup(r.protocolGroup) === normalizedGroup)
+          .map((r) => r.catId)
+          .filter((catId) => assignedSet.has(catId))
+      ),
+    ]
+  }
+
+  if (expectedCatIds.length === 0) {
     return null
   }
 
@@ -167,20 +197,34 @@ export async function computeCurrentRoundJudgeProgress(params: {
   if (allCatIds.length === 0) return 0
 
   if (params.currentRound === 'nomination') {
-    const assignedJudgeIds: number[] = []
+    const expectedPairs = new Set<string>()
     for (const j of judgesWithUser) {
       const scope = await getNominationCatScope(params.competitionId, j.id)
-      if (scope.kind === 'all' ? allCatIds.length > 0 : scope.catIds.length > 0) {
-        assignedJudgeIds.push(j.id)
+      const catIds = scope.kind === 'all' ? allCatIds : scope.catIds
+      for (const catId of catIds) {
+        expectedPairs.add(`${j.id}:${catId}`)
       }
     }
-    if (assignedJudgeIds.length === 0) return 0
-    const doneRows = await NominationPhaseCompletion.query()
+    if (expectedPairs.size === 0) return 0
+
+    const nominationEvals = await Evaluation.query()
       .where('competitionId', params.competitionId)
-      .whereIn('judgeId', assignedJudgeIds)
-      .select('judgeId')
-    const doneIds = new Set(doneRows.map((r) => r.judgeId))
-    return Math.round((doneIds.size / assignedJudgeIds.length) * 100)
+      .where('round', 'nomination')
+      .whereNotNull('judgeId')
+      .whereIn(
+        'judgeId',
+        judgesWithUser.map((j) => j.id)
+      )
+      .select(['judgeId', 'catId'])
+
+    const donePairs = new Set<string>()
+    for (const ev of nominationEvals) {
+      if (ev.judgeId === null) continue
+      const key = `${ev.judgeId}:${ev.catId}`
+      if (expectedPairs.has(key)) donePairs.add(key)
+    }
+
+    return Math.round((donePairs.size / expectedPairs.size) * 100)
   }
 
   if (params.currentRound === 'ring1') {

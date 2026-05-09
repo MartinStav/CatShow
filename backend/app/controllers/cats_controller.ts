@@ -2,6 +2,7 @@ import type { HttpContext } from '@adonisjs/core/http'
 import Cat from '#models/cat'
 import Evaluation from '#models/evaluation'
 import Judge from '#models/judge'
+import CompetitionRole from '#models/competition_role'
 import { getNominationCatScope } from '#utils/nomination_cat_scope'
 import { ensureCompetitionAccess } from '#utils/competition_access'
 import { canRoundRunNow, isSetupLocked } from '#utils/competition_flow'
@@ -45,10 +46,42 @@ export default class CatsController {
       if (!user) {
         return response.unauthorized({ message: 'Vyžaduje sa prihlásenie.' })
       }
-      const judge = await Judge.query()
-        .where('competitionId', competition.id)
-        .where('userId', user.id)
-        .first()
+      let judge: Judge | null = null
+      const rawAsJudgeId = request.input('asJudgeId')
+      const requestedJudgeId = Number(rawAsJudgeId)
+      const asksForSpecificJudge =
+        rawAsJudgeId !== null &&
+        rawAsJudgeId !== undefined &&
+        String(rawAsJudgeId).trim() !== '' &&
+        Number.isFinite(requestedJudgeId)
+
+      if (asksForSpecificJudge) {
+        const hasCompetitionAdminRole = await CompetitionRole.query()
+          .where('competitionId', competition.id)
+          .where('userId', user.id)
+          .where('role', 'administrator')
+          .first()
+
+        const canActAsJudge =
+          user.role === 'superadmin' ||
+          user.role === 'admin' ||
+          competition.createdById === user.id ||
+          !!hasCompetitionAdminRole
+
+        if (canActAsJudge) {
+          judge = await Judge.query()
+            .where('competitionId', competition.id)
+            .where('id', requestedJudgeId)
+            .first()
+        }
+      }
+
+      if (!judge) {
+        judge = await Judge.query()
+          .where('competitionId', competition.id)
+          .where('userId', user.id)
+          .first()
+      }
       if (!judge) {
         return response.ok([])
       }

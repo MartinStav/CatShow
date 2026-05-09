@@ -522,7 +522,9 @@ function submitRing2Ranking() {
   }).onOk(() => {
     void (async () => {
       try {
-        await api.post(`/competitions/${competitionId.value}/ring2/complete`);
+        await api.post(`/competitions/${competitionId.value}/ring2/complete`, {
+          asJudgeId: route.query.asJudgeId ?? undefined,
+        });
         ring2SubmissionLocked.value = true;
         $q.notify({ type: 'positive', message: 'Poradie bolo odovzdané.', position: 'top' });
       } catch (err) {

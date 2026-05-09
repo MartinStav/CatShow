@@ -7,6 +7,7 @@ import JudgingOrder from '#models/judging_order'
 import NominationPhaseCompletion from '#models/nomination_phase_completion'
 import Ring1RankingCompletion from '#models/ring1_ranking_completion'
 import Ring2RankingCompletion from '#models/ring2_ranking_completion'
+import CompetitionRole from '#models/competition_role'
 import { ensureCompetitionAccess } from '#utils/competition_access'
 import {
   validateCompetitionTransition,
@@ -27,6 +28,46 @@ import {
   initializeRunTimerForNewCompetition,
 } from '#utils/competition_run_timer'
 import db from '@adonisjs/lucid/services/db'
+
+async function resolveActingJudgeForCompletion(params: {
+  competitionId: number
+  userId: number
+  userRole: string
+  asJudgeIdRaw: unknown
+  createdById: number | null
+}) {
+  const { competitionId, userId, userRole, asJudgeIdRaw, createdById } = params
+  const requestedJudgeId = Number(asJudgeIdRaw)
+  const asksForSpecificJudge =
+    asJudgeIdRaw !== null &&
+    asJudgeIdRaw !== undefined &&
+    String(asJudgeIdRaw).trim() !== '' &&
+    Number.isFinite(requestedJudgeId)
+
+  if (asksForSpecificJudge) {
+    const hasCompetitionAdminRole = await CompetitionRole.query()
+      .where('competitionId', competitionId)
+      .where('userId', userId)
+      .where('role', 'administrator')
+      .first()
+
+    const canOverrideJudge =
+      userRole === 'superadmin' ||
+      userRole === 'admin' ||
+      createdById === userId ||
+      !!hasCompetitionAdminRole
+
+    if (canOverrideJudge) {
+      const judgeById = await Judge.query()
+        .where('competitionId', competitionId)
+        .where('id', requestedJudgeId)
+        .first()
+      if (judgeById) return judgeById
+    }
+  }
+
+  return Judge.query().where('competitionId', competitionId).where('userId', userId).first()
+}
 
 export default class CompetitionsController {
   async index({ auth, response }: HttpContext) {
@@ -78,7 +119,7 @@ export default class CompetitionsController {
    * súťaž prejde do paused (ak je v nastaveniach ring) alebo finished (bez ringu).
    */
   async completeNomination(ctx: HttpContext) {
-    const { auth, params, response } = ctx
+    const { auth, params, request, response } = ctx
     const user = auth.getUserOrFail()
     const competition = await ensureCompetitionAccess(ctx, params.id, 'operate')
     if (!competition) return
@@ -89,24 +130,43 @@ export default class CompetitionsController {
       })
     }
 
-    const judge = await Judge.query()
-      .where('competitionId', competition.id)
-      .where('userId', user.id)
-      .first()
+    const judge = await resolveActingJudgeForCompletion({
+      competitionId: competition.id,
+      userId: user.id,
+      userRole: user.role,
+      asJudgeIdRaw: request.input('asJudgeId'),
+      createdById: competition.createdById,
+    })
 
     if (!judge) {
       return response.forbidden({ message: 'Nemáte priradený záznam rozhodcu v tejto súťaži.' })
     }
 
-    const myErr = await judgeNominationIncompleteMessage(competition.id, judge.id)
+    const protocolGroupKeyRaw = request.input('protocolGroupKey')
+    const protocolGroupKey =
+      typeof protocolGroupKeyRaw === 'string' && protocolGroupKeyRaw.trim().length > 0
+        ? protocolGroupKeyRaw.trim()
+        : null
+
+    const myErr = await judgeNominationIncompleteMessage(competition.id, judge.id, protocolGroupKey)
     if (myErr) {
       return response.badRequest({ message: myErr })
     }
 
-    await NominationPhaseCompletion.updateOrCreate(
-      { competitionId: competition.id, judgeId: judge.id },
-      {}
-    )
+    const overallErr = await judgeNominationIncompleteMessage(competition.id, judge.id)
+    if (!overallErr) {
+      await NominationPhaseCompletion.updateOrCreate(
+        { competitionId: competition.id, judgeId: judge.id },
+        {}
+      )
+    } else {
+      await competition.refresh()
+      return response.ok({
+        competition,
+        allJudgesDone: false,
+        judgeFullyDone: false,
+      })
+    }
 
     const judgesWithUser = await Judge.query()
       .where('competitionId', competition.id)
@@ -123,7 +183,7 @@ export default class CompetitionsController {
 
     if (completions.length < judgeIds.length) {
       await competition.refresh()
-      return response.ok({ competition, allJudgesDone: false })
+      return response.ok({ competition, allJudgesDone: false, judgeFullyDone: true })
     }
 
     for (const j of judgesWithUser) {
@@ -155,7 +215,7 @@ export default class CompetitionsController {
       payload: { nextStatus: competition.status, nextRound: competition.currentRound },
     })
 
-    return response.ok({ competition, allJudgesDone: true })
+    return response.ok({ competition, allJudgesDone: true, judgeFullyDone: true })
   }
 
   /**
@@ -163,7 +223,7 @@ export default class CompetitionsController {
    * Rozhodca čaká na prepnutie súťaže do Ring 2 v administrácii.
    */
   async completeRing1Ranking(ctx: HttpContext) {
-    const { auth, params, response } = ctx
+    const { auth, params, request, response } = ctx
     const user = auth.getUserOrFail()
     const competition = await ensureCompetitionAccess(ctx, params.id, 'operate')
     if (!competition) return
@@ -174,10 +234,13 @@ export default class CompetitionsController {
       })
     }
 
-    const judge = await Judge.query()
-      .where('competitionId', competition.id)
-      .where('userId', user.id)
-      .first()
+    const judge = await resolveActingJudgeForCompletion({
+      competitionId: competition.id,
+      userId: user.id,
+      userRole: user.role,
+      asJudgeIdRaw: request.input('asJudgeId'),
+      createdById: competition.createdById,
+    })
 
     if (!judge) {
       return response.forbidden({ message: 'Nemáte priradený záznam rozhodcu v tejto súťaži.' })
@@ -209,7 +272,7 @@ export default class CompetitionsController {
    * Potvrdenie odovzdania poradia v ringu 2 daným sudcom (bez zmeny stavu súťaže).
    */
   async completeRing2Ranking(ctx: HttpContext) {
-    const { auth, params, response } = ctx
+    const { auth, params, request, response } = ctx
     const user = auth.getUserOrFail()
     const competition = await ensureCompetitionAccess(ctx, params.id, 'operate')
     if (!competition) return
@@ -220,10 +283,13 @@ export default class CompetitionsController {
       })
     }
 
-    const judge = await Judge.query()
-      .where('competitionId', competition.id)
-      .where('userId', user.id)
-      .first()
+    const judge = await resolveActingJudgeForCompletion({
+      competitionId: competition.id,
+      userId: user.id,
+      userRole: user.role,
+      asJudgeIdRaw: request.input('asJudgeId'),
+      createdById: competition.createdById,
+    })
 
     if (!judge) {
       return response.forbidden({ message: 'Nemáte priradený záznam rozhodcu v tejto súťaži.' })
@@ -259,6 +325,8 @@ export default class CompetitionsController {
         id: c.id,
         name: c.name,
         date: c.date,
+        description: c.description,
+        location: c.location,
         status: c.status,
         published: c.published,
         currentRound: c.currentRound,
@@ -491,20 +559,74 @@ export default class CompetitionsController {
 
     const bisNominations = evaluations.filter((e) => e.nomBis).length
 
-    const groupStats = competition.groups.map((group) => {
-      const groupCats = cats.filter((c) => c.group === group.name)
-      const rated = groupCats.filter((c) => evaluatedCatIds.has(c.id)).length
-      const total = groupCats.length
-      const progress = total > 0 ? Math.round((rated / total) * 100) : 0
-      const activeCat = groupCats.find((c) => c.status === 'judging' || c.status === 'called')
-      return {
-        name: group.name,
-        progress,
-        total,
-        rated,
-        currentCat: activeCat?.name || null,
+    const normalizeGroup = (v: unknown): string | null => {
+      if (typeof v !== 'string') return null
+      const t = v.trim()
+      return t.length > 0 ? t : null
+    }
+
+    const protocolRows = await JudgingOrder.query()
+      .where('competitionId', competition.id)
+      .select(['catId', 'protocolGroup'])
+
+    const protocolGroupsByCatId = new Map<number, Set<string>>()
+    for (const row of protocolRows) {
+      const label = normalizeGroup(row.protocolGroup)
+      if (!label) continue
+      const set = protocolGroupsByCatId.get(row.catId) ?? new Set<string>()
+      set.add(label)
+      protocolGroupsByCatId.set(row.catId, set)
+    }
+
+    const groupNames = new Set<string>()
+    for (const g of competition.groups) {
+      const name = normalizeGroup(g.name)
+      if (name) groupNames.add(name)
+    }
+    for (const row of protocolRows) {
+      const label = normalizeGroup(row.protocolGroup)
+      if (label) groupNames.add(label)
+    }
+    for (const c of cats) {
+      const main = normalizeGroup(c.group)
+      if (main) groupNames.add(main)
+      if (Array.isArray(c.groups)) {
+        for (const g of c.groups) {
+          const label = normalizeGroup(g)
+          if (label) groupNames.add(label)
+        }
       }
-    })
+    }
+
+    const groupStats = [...groupNames]
+      .map((groupName) => {
+        const groupCats = cats.filter((c) => {
+          const protocolGroups = protocolGroupsByCatId.get(c.id)
+          const fromProtocol =
+            protocolGroups !== undefined &&
+            protocolGroups.size > 0 &&
+            protocolGroups.has(groupName)
+          const fromMain = normalizeGroup(c.group) === groupName
+          const fromArray =
+            Array.isArray(c.groups) &&
+            c.groups.some((g) => normalizeGroup(g) === groupName)
+          // Mačka môže byť zaradená v protokole pod iným názvom (napr. „Dospelé dlhosrsté“)
+          // a zároveň mať WCF skupinu I–IV na karte — oboje musí fungovať paralelne.
+          return fromProtocol || fromMain || fromArray
+        })
+        const rated = groupCats.filter((c) => evaluatedCatIds.has(c.id)).length
+        const total = groupCats.length
+        const progress = total > 0 ? Math.round((rated / total) * 100) : 0
+        const activeCat = groupCats.find((c) => c.status === 'judging' || c.status === 'called')
+        return {
+          name: groupName,
+          progress,
+          total,
+          rated,
+          currentCat: activeCat?.name || null,
+        }
+      })
+      .filter((row) => row.total > 0)
 
     return response.ok({
       competition: {

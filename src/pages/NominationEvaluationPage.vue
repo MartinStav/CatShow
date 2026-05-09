@@ -171,7 +171,7 @@
                   {{ cat.grade }}
                 </q-badge>
               </div>
-              <div v-if="cat.titles.length > 0" class="titles-container">
+              <div v-if="cat.titles.length > 0 && catGradeAllowsNomBis(cat.grade)" class="titles-container">
                 <q-badge
                   v-for="title in cat.titles"
                   :key="title"
@@ -257,9 +257,12 @@
           </div>
 
           <!-- Title Selection -->
-          <div class="selection-section">
+          <div
+            v-if="selectedGradeAllowsTitles && availableTitlesForSelectedCat.length > 0"
+            class="selection-section"
+          >
             <div class="section-title">Titul (optional)</div>
-            <div v-if="availableTitlesForSelectedCat.length > 0" class="title-buttons">
+            <div class="title-buttons">
               <q-btn
                 v-for="title in availableTitlesForSelectedCat"
                 :key="title"
@@ -273,7 +276,6 @@
                 {{ title }}
               </q-btn>
             </div>
-            <div v-else class="text-grey-6 text-body2">Pre túto mačku nie je dostupný žiadny titul.</div>
           </div>
 
           <!-- NomBIS Selection -->
@@ -604,22 +606,25 @@ const totalCats = computed(() => catsForGrid.value.length);
 const ratedCount = computed(() => catsForGrid.value.filter((c) => c.grade !== null).length);
 
 const nominatedCatName = computed(() => {
-  const cat = cats.value.find((c) => c.id === nominatedCatId.value);
+  const cat = catsForGrid.value.find((c) => c.id === nominatedCatId.value);
   return cat?.name || '';
 });
 
 const nominatedCatRegistration = computed(() => {
-  const cat = cats.value.find((c) => c.id === nominatedCatId.value);
+  const cat = catsForGrid.value.find((c) => c.id === nominatedCatId.value);
   return cat?.registrationNumber ?? '';
 });
 
 /** Mačky dostupné pre ručný NomBIS výber. WCF vhodnosť riešime iba varovaním. */
 const eligibleCats = computed(() => {
-  return cats.value.filter((c) => c.grade != null);
+  return catsForGrid.value.filter((c) => catGradeAllowsNomBis(c.grade));
 });
 
 /** Či je vybraný grade vhodný pre NomBIS (zobrazenie tlačidla NomBIS v modáli). */
 const selectedGradeAllowsNomBis = computed(() => {
+  return catGradeAllowsNomBis(selectedGrade.value);
+});
+const selectedGradeAllowsTitles = computed(() => {
   return catGradeAllowsNomBis(selectedGrade.value);
 });
 
@@ -633,6 +638,19 @@ function catGradeAllowsNomBis(grade: string | null): boolean {
 const isNominatedForBIS = computed(() => {
   return selectedCat.value?.id === nominatedCatId.value;
 });
+
+function syncNomBisForActiveGroup() {
+  const scoped = catsForGrid.value;
+  if (scoped.length === 0) {
+    nominatedCatId.value = null;
+    return;
+  }
+  const scopedIds = new Set(scoped.map((c) => Number(c.id)));
+  const nom = [...evaluationMap.value.values()].find(
+    (e) => e.nomBis === true && scopedIds.has(Number(e.catId))
+  );
+  nominatedCatId.value = nom ? String(nom.catId) : null;
+}
 
 const getCardClass = (cat: Cat): string => {
   if (!cat.grade) return 'card-unrated';
@@ -684,7 +702,10 @@ const loadData = async (opts: { silent?: boolean } = {}) => {
 
     const [catsRes, evalsRes, judgesRes, ordersRes] = await Promise.all([
       api.get<ApiCat[]>(`/competitions/${competitionId.value}/cats`, {
-        params: { nominationForMe: true },
+        params: {
+          nominationForMe: true,
+          asJudgeId: route.query.asJudgeId ?? undefined,
+        },
       }),
       api.get<Evaluation[]>(`/competitions/${competitionId.value}/evaluations`, { params: { round: 'nomination' } }),
       api.get<Judge[]>(`/competitions/${competitionId.value}/judges`),
@@ -745,8 +766,7 @@ const loadData = async (opts: { silent?: boolean } = {}) => {
             : parseCatCallStatus(c.status),
       };
     });
-    const nomEval = [...map.values()].find((e) => Boolean(e.nomBis));
-    nominatedCatId.value = nomEval ? String(nomEval.catId) : null;
+    syncNomBisForActiveGroup();
   } catch (err) {
     console.error('Failed to load nomination data:', err);
   } finally {
@@ -772,6 +792,10 @@ watch(
     void loadData({ silent: true });
   },
 );
+
+watch([selectedNomProtocolGroup, catsForGrid], () => {
+  syncNomBisForActiveGroup();
+});
 
 async function cycleCatCallStatus(cat: Cat) {
   if (!competitionId.value || judgeSubmissionLocked.value) return;
@@ -866,10 +890,18 @@ const toggleNomBIS = () => {
 
 function toggleNominationGrade(grade: string) {
   selectedGrade.value = selectedGrade.value === grade ? null : grade;
-  if (!selectedGrade.value && selectedCat.value && nominatedCatId.value === selectedCat.value.id) {
+  const selectedCatIsNominated =
+    selectedCat.value != null && nominatedCatId.value === selectedCat.value.id;
+  if (
+    selectedCatIsNominated &&
+    (!selectedGrade.value || !catGradeAllowsNomBis(selectedGrade.value))
+  ) {
     nominatedCatId.value = null;
   }
   if (!selectedGrade.value) {
+    selectedTitles.value = [];
+  }
+  if (!selectedGradeAllowsTitles.value) {
     selectedTitles.value = [];
   }
 }
@@ -891,10 +923,14 @@ const saveJudging = async () => {
     selectedGrade.value.trim() !== ''
       ? selectedGrade.value.trim()
       : null;
+  const gradeAllowsNomBis = catGradeAllowsNomBis(effectiveGrade);
+  const gradeAllowsTitles = catGradeAllowsNomBis(effectiveGrade);
+  const effectiveTitles = gradeAllowsTitles ? [...selectedTitles.value] : [];
 
   try {
+    const isNomBIS = nominatedCatId.value === selectedCat.value.id && gradeAllowsNomBis;
     const oldNomBisCatId = nominatedCatId.value ? Number(nominatedCatId.value) : null;
-    if (oldNomBisCatId && oldNomBisCatId !== catId) {
+    if (isNomBIS && oldNomBisCatId && oldNomBisCatId !== catId) {
       const oldEval = evaluationMap.value.get(oldNomBisCatId);
       if (oldEval) {
         await api.put(`/competitions/${competitionId.value}/evaluations/${oldEval.id}`, {
@@ -929,13 +965,12 @@ const saveJudging = async () => {
         catUn.titles = [];
       }
     } else {
-      const isNomBIS = nominatedCatId.value === selectedCat.value.id;
       if (eval_) {
         await api.put(`/competitions/${competitionId.value}/evaluations/${eval_.id}`, {
           judgeId: currentJudgeId.value,
           round: 'nomination',
           grade: effectiveGrade,
-          titles: selectedTitles.value,
+          titles: effectiveTitles,
           accepted: null,
           nomBis: isNomBIS,
           position: null,
@@ -946,7 +981,7 @@ const saveJudging = async () => {
           judgeId: currentJudgeId.value,
           round: 'nomination',
           grade: effectiveGrade,
-          titles: selectedTitles.value,
+          titles: effectiveTitles,
           accepted: null,
           nomBis: isNomBIS,
           position: null,
@@ -956,7 +991,7 @@ const saveJudging = async () => {
       const cat = cats.value.find((c) => c.id === selectedCat.value?.id);
       if (cat) {
         cat.grade = effectiveGrade;
-        cat.titles = [...selectedTitles.value];
+        cat.titles = effectiveTitles;
       }
     }
     await loadData({ silent: true });
@@ -968,6 +1003,14 @@ const saveJudging = async () => {
 
 const openNomBISModal = () => {
   if (judgeSubmissionLocked.value) return;
+  if (eligibleCats.value.length === 0) {
+    $q.notify({
+      type: 'warning',
+      message: 'Žiadna mačka aktuálne nespĺňa podmienky pre NomBIS.',
+      position: 'top',
+    });
+    return;
+  }
   tempSelectedNomBIS.value = nominatedCatId.value;
   showNomBISModal.value = true;
 };
@@ -983,6 +1026,16 @@ const confirmNomBISSelection = async () => {
     return;
   }
   const catId = Number(tempSelectedNomBIS.value);
+  const candidate = catsForGrid.value.find((c) => Number(c.id) === catId);
+  if (!candidate || !catGradeAllowsNomBis(candidate.grade)) {
+    $q.notify({
+      type: 'warning',
+      message: 'Vybraná mačka nespĺňa podmienky pre NomBIS.',
+      position: 'top',
+    });
+    closeNomBISModal();
+    return;
+  }
   const eval_ = evaluationMap.value.get(catId);
   if (!eval_) {
     closeNomBISModal();
@@ -1036,13 +1089,23 @@ const confirmNomBIS = async () => {
     const { data } = await api.post<{
       competition: { currentRound: string | null; status: string };
       allJudgesDone: boolean;
-    }>(`/competitions/${competitionId.value}/nomination/complete`);
+      judgeFullyDone?: boolean;
+    }>(`/competitions/${competitionId.value}/nomination/complete`, {
+      asJudgeId: route.query.asJudgeId ?? undefined,
+      protocolGroupKey:
+        judgingOrders.value.length > 0 && judgeProtocolGroupTabs.value.length > 1
+          ? selectedNomProtocolGroup.value
+          : undefined,
+    });
 
     if (!data.allJudgesDone) {
-      judgeSubmissionLocked.value = true;
+      judgeSubmissionLocked.value = data.judgeFullyDone === true;
       $q.notify({
         type: 'info',
-        message: 'Vaša nominácia je potvrdená. Čaká sa, kým potvrdia aj ostatní rozhodcovia.',
+        message:
+          data.judgeFullyDone === true
+            ? 'Vaša nominácia je potvrdená. Čaká sa, kým potvrdia aj ostatní rozhodcovia.'
+            : 'Skupina je potvrdená. Pre finálne odovzdanie rozhodcu ešte ohodnoťte/potvrďte aj ďalšie skupiny.',
         position: 'top',
       });
       await compStore.fetchAll();
