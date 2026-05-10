@@ -46,7 +46,7 @@
     </q-card>
 
     <!-- Cats by table (protokol) + status -->
-    <div class="tables-grid">
+    <div class="tables-grid" :style="tablesGridStyle">
       <q-card
         v-for="(tbl, tblIdx) in scoringTables"
         :key="tableCardKey(tbl, tblIdx)"
@@ -233,6 +233,31 @@ function syncRunTimerLocalTick() {
 
 watch(() => runTimer.value?.isRunning, syncRunTimerLocalTick, { immediate: true });
 
+/**
+ * Dynamicky vypočíta optimálny počet stĺpcov pre mriežku stolov.
+ * Max 5 v rade. Pre menší počet stolov sa rozloží pekne:
+ * 1→1, 2→2, 3→3, 4→2, 5→5, 6→3, 7→4, 8→4, 9→5, 10→5
+ */
+const tablesGridCols = computed(() => {
+  const count = scoringTables.value.length;
+  if (count <= 0) return 1;
+  if (count <= 3) return count;
+  if (count === 4) return 2;
+  if (count === 5) return 5;
+  if (count <= 6) return 3;
+  if (count <= 8) return 4;
+  return 5;
+});
+
+const tablesGridStyle = computed(() => {
+  const cols = tablesGridCols.value;
+  return {
+    display: 'grid',
+    gridTemplateColumns: `repeat(${cols}, 1fr)`,
+    gap: '1rem',
+  };
+});
+
 function legacySingleTableFromResponse(data: ScoringResponse): ScoringTable[] {
   const judging: ActiveCat[] = [];
   const called: ActiveCat[] = [];
@@ -388,25 +413,18 @@ onUnmounted(() => {
 
 .tables-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
   gap: 1rem;
-}
-
-@media (max-width: 1200px) {
-  .tables-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
 }
 
 @media (max-width: 768px) {
   .tables-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, 1fr) !important;
   }
 }
 
 @media (max-width: 480px) {
   .tables-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr !important;
   }
 }
 

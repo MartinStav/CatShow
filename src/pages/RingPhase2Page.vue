@@ -178,16 +178,6 @@
         label="Odoslať poradie"
         @click="submitRing2Ranking"
       />
-      <q-btn
-        v-if="canFinishCompetition"
-        unelevated
-        color="green"
-        class="full-width ring2-action-btn"
-        no-caps
-        icon="check_circle"
-        label="Potvrdiť poradie a ukončiť súťaž"
-        @click="confirmRing2Complete"
-      />
     </div>
 
     <!-- Position Selection Modal -->
@@ -310,12 +300,7 @@ useCompetitionRealtime({
   onInvalidate: () => void loadData({ silent: true }),
 });
 
-/** Ukončenie súťaže (stav „Ukončená“) – nie sudca, len systémový alebo súťažný administrátor. */
-const canFinishCompetition = computed(() => {
-  const cid = Number(competitionId.value);
-  if (!Number.isFinite(cid)) return false;
-  return authStore.isAdmin || authStore.hasCompetitionRole(cid, ['administrator']);
-});
+
 
 const judgesSnapshot = ref<Judge[]>([]);
 
@@ -546,42 +531,7 @@ function submitRing2Ranking() {
   });
 }
 
-function confirmRing2Complete() {
-  if (!competitionId.value || !canConfirmRing2.value) return;
-  $q.dialog({
-    title: 'Ukončiť súťaž',
-    message:
-      'Tým sa nastaví stav „Ukončená“ a aktuálne kolo sa vymaže. Opravíte to v administrácii súťaže, ak treba.',
-    cancel: true,
-    persistent: true,
-  }).onOk(() => {
-    void (async () => {
-      try {
-        await api.put(`/competitions/${competitionId.value}`, {
-          currentRound: null,
-          status: 'finished',
-        });
-        ring2PhaseActive.value = false;
-        cats.value = [];
-        $q.notify({ type: 'positive', message: 'Poradie potvrdené. Súťaž je ukončená.', position: 'top' });
-      } catch (err) {
-        console.error(err);
-        const serverMsg =
-          axios.isAxiosError(err) && typeof err.response?.data === 'object' && err.response.data !== null
-            ? (err.response.data as { message?: string }).message
-            : undefined;
-        $q.notify({
-          type: 'negative',
-          message:
-            typeof serverMsg === 'string' && serverMsg.length > 0
-              ? serverMsg
-              : 'Nepodarilo sa uložiť. Skúste v administrácii (Nastavenia).',
-          position: 'top',
-        });
-      }
-    })();
-  });
-}
+
 
 async function cycleCatCallStatus(cat: Cat) {
   if (!competitionId.value || ring2SubmissionLocked.value) return;

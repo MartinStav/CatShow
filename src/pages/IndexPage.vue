@@ -675,7 +675,7 @@ const goToCompetition = (id: number) => {
 
   // Prihlásený používateľ s jednou rolou → auto-redirect.
   const roles =
-    authStore.user?.competitionRoles.filter((cr) => Number(cr.competitionId) === Number(id)) || [];
+    authStore.user?.competitionRoles?.filter((cr) => Number(cr.competitionId) === Number(id)) || [];
 
   if (comp.status === 'finished') {
     if (roles.length === 1 && !authStore.isAdmin) {

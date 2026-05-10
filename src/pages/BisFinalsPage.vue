@@ -32,6 +32,24 @@
           <div v-if="canManage" class="row q-gutter-sm q-mb-md justify-end">
             <q-space />
             <q-btn
+              outline
+              color="primary"
+              icon="sync"
+              no-caps
+              :loading="busyAction"
+              label="Stiahnuť z hodnotení (NomBIS)"
+              @click="syncNomBis"
+            />
+            <q-btn
+              outline
+              color="secondary"
+              icon="calculate"
+              no-caps
+              :loading="busyAction"
+              label="Zistiť BIV (Best in Variety)"
+              @click="recomputeBiv"
+            />
+            <q-btn
               v-if="canFinishCompetition"
               unelevated
               color="positive"
@@ -485,6 +503,52 @@ function confirmFinishCompetition() {
         });
       } catch (err) {
         notifyError(err, 'Ukončenie súťaže zlyhalo');
+      } finally {
+        busyAction.value = false;
+      }
+    })();
+  });
+}
+
+function syncNomBis() {
+  if (!canManage.value) return;
+  $q.dialog({
+    title: 'Synchronizovať Nominácie',
+    message: 'Naozaj chcete stiahnuť udelené NomBIS z hodnotení rozhodcov? Toto premaže ručné zmeny u panelu finalistov a načíta dáta z hodnotení v základnom kole.',
+    cancel: true,
+    persistent: true,
+  }).onOk(() => {
+    void (async () => {
+      busyAction.value = true;
+      try {
+        await api.post(`/competitions/${competitionId.value}/bis-awards/sync-nombis`);
+        await loadAll({ silent: true });
+        $q.notify({ type: 'positive', message: 'Nominácie skopírované', position: 'top' });
+      } catch (err) {
+        notifyError(err, 'Synchronizácia NomBIS zlyhala');
+      } finally {
+        busyAction.value = false;
+      }
+    })();
+  });
+}
+
+function recomputeBiv() {
+  if (!canManage.value) return;
+  $q.dialog({
+    title: 'Vypočítať BIV',
+    message: 'Naozaj chcete nechať systém prepočítať všetkých Best in Variety podľa pravidla 3 mačiek v kategórii farby? Premažú sa existujúce BIV priradenia.',
+    cancel: true,
+    persistent: true,
+  }).onOk(() => {
+    void (async () => {
+      busyAction.value = true;
+      try {
+        await api.post(`/competitions/${competitionId.value}/bis-awards/recompute-biv`, { force: true });
+        await loadAll({ silent: true });
+        $q.notify({ type: 'positive', message: 'BIV výpočet bol dokončený', position: 'top' });
+      } catch (err) {
+        notifyError(err, 'Výpočet BIV zlyhal');
       } finally {
         busyAction.value = false;
       }
